@@ -4,7 +4,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot, doc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- CONFIGURACIÓN DE FIREBASE (Tus llaves ya están aquí) ---
+// --- CONFIGURACIÓN DE FIREBASE ---
 const firebaseConfig = {
   apiKey: "AIzaSyDZdScsyfbFZvJxToBOVatXO42l0kWbRcc",
   authDomain: "todomaletines-cotizar.firebaseapp.com",
@@ -14,8 +14,8 @@ const firebaseConfig = {
   appId: "1:992361155942:web:2cb1d605f3f4e86b8ecca7"
 };
 
-// Inicializamos Firebase
-let app, auth, db;
+// Inicializamos Firebase de forma segura
+let app: any, auth: any, db: any;
 try {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
@@ -24,12 +24,18 @@ try {
   console.warn("Firebase no iniciado correctamente", e);
 }
 
-// --- FUNCIÓN AUXILIAR PARA CARGAR LIBRERÍAS (Modo Universal) ---
-const loadScript = (src) => {
+// --- UTILIDAD PARA JS LIBRARIES ---
+declare global {
+  interface Window {
+    jspdf: any;
+  }
+}
+
+const loadScript = (src: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector(`script[src="${src}"]`);
     if (existing) {
-      if (existing.dataset.loaded === "true") {
+      if (existing.getAttribute('data-loaded') === "true") {
         resolve();
       } else {
         existing.addEventListener('load', () => resolve());
@@ -39,9 +45,9 @@ const loadScript = (src) => {
     const script = document.createElement('script');
     script.src = src;
     script.async = true;
-    script.dataset.loaded = "false";
+    script.setAttribute('data-loaded', "false");
     script.onload = () => {
-        script.dataset.loaded = "true";
+        script.setAttribute('data-loaded', "true");
         resolve();
     };
     script.onerror = reject;
@@ -50,14 +56,14 @@ const loadScript = (src) => {
 };
 
 export default function CotizadorApp() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [pdfReady, setPdfReady] = useState(false);
   const [activeTab, setActiveTab] = useState('cotizacion'); 
-  const fileInputRefs = useRef({}); 
-  const logoInputRef = useRef(null);
+  const fileInputRefs = useRef<{[key: number]: HTMLInputElement | null}>({}); 
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
-  // --- DATOS DE LA EMPRESA ---
+  // --- DATOS ---
   const [companyProfile, setCompanyProfile] = useState({
     name: 'TODO MALETINES',
     ruc: '20607442950',
@@ -65,14 +71,13 @@ export default function CotizadorApp() {
     web: 'www.todomaletines.com',
     email: 'ventas@todomaletines.com',
     phone: '933761658 / 969940986',
-    logo: null,
+    logo: null as string | null,
     defaultTerms: `1. El pago será con 50% de anticipo y 50% contraentrega.
 2. Abono a cuenta BBVA 0011-0285-0201746656, a nombre de Marina Correa.
 3. Para dar conformidad enviar firmada o sellada a nuestro email.
 4. La firma o sello indica la aceptación del cliente.`
   });
 
-  // --- DATOS DE COTIZACIÓN ---
   const [clientData, setClientData] = useState({
     name: '', ruc: '', address: '', contact: '', email: '', phone: ''
   });
@@ -83,15 +88,15 @@ export default function CotizadorApp() {
     number: '00232', currency: 'S/', taxRate: 18
   });
 
-  const [items, setItems] = useState([
+  const [items, setItems] = useState<any[]>([
     { id: 1, code: 'PM348DC', description: 'Cooler nylon forro térmico, logo bordado 12cm, 40*40*40', qty: 570, price: 58.00, image: null }
   ]);
 
   const [terms, setTerms] = useState(companyProfile.defaultTerms);
-  const [savedClients, setSavedClients] = useState([]);
+  const [savedClients, setSavedClients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // --- INICIO Y CARGA ---
+  // --- EFECTOS ---
   useEffect(() => {
     const loadPdfLibs = async () => {
         try {
@@ -113,7 +118,6 @@ export default function CotizadorApp() {
     } else { setLoading(false); }
   }, []);
 
-  // --- LISTENERS DE FIREBASE ---
   useEffect(() => {
     if (!user || !db) return;
     const qClients = collection(db, 'users', user.uid, 'clients');
@@ -128,7 +132,7 @@ export default function CotizadorApp() {
             const docSnap = await getDoc(docRef);
             if (docSnap.exists()) {
                 const data = docSnap.data();
-                setCompanyProfile({ ...data, ruc: data.ruc || '20607442950' });
+                setCompanyProfile({ ...data, ruc: data.ruc || '20607442950' } as any);
                 setTerms(data.defaultTerms || '');
             }
         } catch (e) { console.error("Config fetch error", e); }
@@ -137,7 +141,7 @@ export default function CotizadorApp() {
     return () => unsubClients();
   }, [user]);
 
-  // --- LÓGICA ---
+  // --- HANDLERS ---
   const calculateTotals = () => {
     let totalWithTax = 0;
     items.forEach(item => totalWithTax += item.qty * item.price);
@@ -148,10 +152,10 @@ export default function CotizadorApp() {
   };
 
   const handleAddItem = () => setItems([...items, { id: Date.now(), code: '', description: '', qty: 1, price: 0, image: null }]);
-  const handleRemoveItem = (id) => setItems(items.filter(item => item.id !== id));
-  const handleItemChange = (id, field, value) => setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
+  const handleRemoveItem = (id: number) => setItems(items.filter(item => item.id !== id));
+  const handleItemChange = (id: number, field: string, value: any) => setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
 
-  const handleImageUpload = (id, e) => {
+  const handleImageUpload = (id: number, e: any) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
@@ -160,11 +164,15 @@ export default function CotizadorApp() {
     }
   };
 
-  const handleLogoUpload = (e) => {
+  const removeImage = (id: number) => {
+    handleItemChange(id, 'image', null);
+  };
+
+  const handleLogoUpload = (e: any) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => setCompanyProfile(prev => ({ ...prev, logo: reader.result }));
+      reader.onloadend = () => setCompanyProfile(prev => ({ ...prev, logo: reader.result as string }));
       reader.readAsDataURL(file);
     }
   };
@@ -189,7 +197,7 @@ export default function CotizadorApp() {
       } catch(e) { console.error(e); }
   }
 
-  const loadClient = (client) => {
+  const loadClient = (client: any) => {
     setClientData({
       name: client.name || '', ruc: client.ruc || '', address: client.address || '',
       contact: client.contact || '', email: client.email || '', phone: client.phone || ''
@@ -266,7 +274,7 @@ export default function CotizadorApp() {
             4: { cellWidth: 25, halign: 'right' },
             5: { cellWidth: 25, halign: 'right' },
           },
-          didDrawCell: (data) => {
+          didDrawCell: (data: any) => {
             if (data.column.index === 0 && data.cell.section === 'body') {
                const item = items[data.row.index];
                if (item && item.image) {
@@ -309,10 +317,8 @@ export default function CotizadorApp() {
   if (loading) return <div className="p-10 text-center flex flex-col items-center justify-center h-screen"><Loader className="animate-spin mb-2 text-blue-600"/>Iniciando...</div>;
 
   return (
-    // CAMBIO CLAVE: 'fixed inset-0' fuerza a la app a ocupar toda la pantalla sin scroll externo
     <div className="fixed inset-0 flex flex-col bg-gray-50 font-sans overflow-hidden">
       
-      {/* HEADER - Se queda quieto */}
       <div className="bg-blue-900 text-white p-4 shadow-md shrink-0 z-20">
         <div className="flex justify-between items-center max-w-4xl mx-auto">
           <h1 className="text-xl font-bold flex items-center gap-2"><ShoppingBag size={20} /> Todo Maletines</h1>
@@ -322,7 +328,6 @@ export default function CotizadorApp() {
         </div>
       </div>
 
-      {/* TABS - Se quedan quietas */}
       <div className="flex bg-white border-b border-gray-200 shrink-0 z-10 overflow-x-auto justify-center">
         <div className="flex w-full max-w-4xl">
            <button onClick={() => setActiveTab('cotizacion')} className={`flex-1 py-3 px-2 text-sm font-medium border-b-2 whitespace-nowrap ${activeTab === 'cotizacion' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}>Cotización</button>
@@ -332,7 +337,6 @@ export default function CotizadorApp() {
         </div>
       </div>
 
-      {/* CONTENIDO - Único que se mueve (scroll) */}
       <div className="flex-1 overflow-y-auto p-4 w-full">
         <div className="max-w-4xl mx-auto pb-20">
             
@@ -381,11 +385,11 @@ export default function CotizadorApp() {
                       <h4 className="text-xs font-bold text-gray-400 mb-2">ITEM #{index + 1}</h4>
                       <div className="flex gap-3 items-start">
                         <div className="w-20 shrink-0 flex flex-col items-center">
-                            <div className="w-20 h-20 bg-gray-100 rounded border border-gray-300 flex items-center justify-center overflow-hidden relative cursor-pointer hover:bg-gray-200 transition-colors" onClick={() => fileInputRefs.current[item.id].click()}>
+                            <div className="w-20 h-20 bg-gray-100 rounded border border-gray-300 flex items-center justify-center overflow-hidden relative cursor-pointer hover:bg-gray-200 transition-colors" onClick={() => fileInputRefs.current?.[item.id]?.click()}>
                               {item.image ? (<img src={item.image} alt="Producto" className="w-full h-full object-cover" />) : (<ImageIcon className="text-gray-400" size={24} />)}
                             </div>
-                            <input type="file" ref={el => fileInputRefs.current[item.id] = el} className="hidden" accept="image/*" onChange={(e) => handleImageUpload(item.id, e)}/>
-                            {item.image ? (<button onClick={() => removeImage(item.id)} className="text-[10px] text-red-500 mt-1">Quitar</button>) : (<span className="text-[10px] text-blue-500 mt-1 cursor-pointer" onClick={() => fileInputRefs.current[item.id].click()}>Subir foto</span>)}
+                            <input type="file" ref={el => { if(fileInputRefs.current) fileInputRefs.current[item.id] = el; }} className="hidden" accept="image/*" onChange={(e) => handleImageUpload(item.id, e)}/>
+                            {item.image ? (<button onClick={() => removeImage(item.id)} className="text-[10px] text-red-500 mt-1">Quitar</button>) : (<span className="text-[10px] text-blue-500 mt-1 cursor-pointer" onClick={() => fileInputRefs.current?.[item.id]?.click()}>Subir foto</span>)}
                         </div>
                         <div className="flex-1 space-y-3">
                             <div className="grid grid-cols-3 gap-2">
@@ -430,7 +434,7 @@ export default function CotizadorApp() {
                     <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
                         <h3 className="text-gray-500 text-xs font-bold uppercase mb-4 border-b pb-2">Datos de tu Empresa</h3>
                         <div className="mb-6 flex flex-col items-center">
-                            <div className="w-32 h-32 bg-gray-100 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden cursor-pointer relative" onClick={() => logoInputRef.current.click()}>
+                            <div className="w-32 h-32 bg-gray-100 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden cursor-pointer relative" onClick={() => logoInputRef.current?.click()}>
                                 {companyProfile.logo ? (<img src={companyProfile.logo} className="w-full h-full object-contain" alt="Logo" />) : (<div className="text-center text-gray-400"><ImageIcon className="mx-auto mb-1" /><span className="text-xs">Subir Logo</span></div>)}
                             </div>
                             <input type="file" ref={logoInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} />
@@ -451,7 +455,7 @@ export default function CotizadorApp() {
             )}
         </div>
       </div>
-      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v2.4 - MODO APP ACTIVADO</div>
+      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v2.6 - MODO APP FIJO (Final Corregido)</div>
     </div>
   );
 }
