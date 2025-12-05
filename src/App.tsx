@@ -4,7 +4,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot, doc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- CONFIGURACIÓN DE FIREBASE ---
+// --- CONFIGURACIÓN DE FIREBASE (Tus llaves reales) ---
 const firebaseConfig = {
   apiKey: "AIzaSyDZdScsyfbFZvJxToBOVatXO42l0kWbRcc",
   authDomain: "todomaletines-cotizar.firebaseapp.com",
@@ -21,41 +21,28 @@ try {
   auth = getAuth(app);
   db = getFirestore(app);
 } catch (e) {
-  console.warn("Firebase no iniciado correctamente", e);
+  console.warn("Firebase error (posiblemente ya inicializado)", e);
 }
 
-// --- UTILIDAD PARA JS LIBRARIES ---
-declare global {
-  interface Window {
-    jspdf: any;
-  }
-}
-
+// --- UTILIDAD PDF ---
+declare global { interface Window { jspdf: any; } }
 const loadScript = (src: string): Promise<void> => {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const existing = document.querySelector(`script[src="${src}"]`);
     if (existing) {
-      if (existing.getAttribute('data-loaded') === "true") {
+        // Si ya existe, forzamos el evento de carga si es necesario
         resolve();
-      } else {
-        existing.addEventListener('load', () => resolve());
-      }
-      return;
+        return;
     }
     const script = document.createElement('script');
     script.src = src;
-    script.async = true;
-    script.setAttribute('data-loaded', "false");
-    script.onload = () => {
-        script.setAttribute('data-loaded', "true");
-        resolve();
-    };
-    script.onerror = reject;
+    script.onload = () => resolve();
     document.body.appendChild(script);
   });
 };
 
 export default function CotizadorApp() {
+  // CORRECCIÓN AQUÍ: Usamos 'any' para evitar el error de importación de TypeScript
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [pdfReady, setPdfReady] = useState(false);
@@ -63,20 +50,22 @@ export default function CotizadorApp() {
   const fileInputRefs = useRef<{[key: number]: HTMLInputElement | null}>({}); 
   const logoInputRef = useRef<HTMLInputElement>(null);
 
-  // --- DATOS ---
-  const [companyProfile, setCompanyProfile] = useState({
-    name: 'TODO MALETINES',
+  // --- DATOS POR DEFECTO (HARDCODED - ANTCOR) ---
+  const defaultProfile = {
+    name: 'MULTISERVICIOS ANTCOR S.A.C.', 
     ruc: '20607442950',
     address: 'Jiron Amazonas 426 Cercado de Lima, Lima-Perú',
     web: 'www.todomaletines.com',
     email: 'ventas@todomaletines.com',
     phone: '933761658 / 969940986',
     logo: null as string | null,
-    defaultTerms: `1. El pago será con 50% de anticipo y 50% contraentrega.
-2. Abono a cuenta BBVA 0011-0285-0201746656, a nombre de Marina Correa.
-3. Para dar conformidad enviar firmada o sellada a nuestro email.
-4. La firma o sello indica la aceptación del cliente.`
-  });
+    defaultTerms: `1° El pago será con 50% de anticipo y 50% contraentrega, se dará la verificación del mismo, el abono se realizara a la cuenta BCP 305-9843679-0-06, a nombre Multiservicios Antcor S.A.C. CCI: 00230500984367900611
+2° Para dar la conformidad a esta cotización se debe enviar firmada o sellada a nuestro email.
+3° La firma o sello indica la aceptación del cliente
+4° El costo incluye Brandeado y delivery gratis en Lima metropolitana, las imágenes son referenciales`
+  };
+
+  const [companyProfile, setCompanyProfile] = useState(defaultProfile);
 
   const [clientData, setClientData] = useState({
     name: '', ruc: '', address: '', contact: '', email: '', phone: ''
@@ -92,53 +81,41 @@ export default function CotizadorApp() {
     { id: 1, code: 'PM348DC', description: 'Cooler nylon forro térmico, logo bordado 12cm, 40*40*40', qty: 570, price: 58.00, image: null }
   ]);
 
-  const [terms, setTerms] = useState(companyProfile.defaultTerms);
+  const [terms, setTerms] = useState(defaultProfile.defaultTerms);
   const [savedClients, setSavedClients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // --- EFECTOS ---
+  // --- INICIO ---
   useEffect(() => {
-    const loadPdfLibs = async () => {
-        try {
-            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js');
-            console.log("Motor PDF Listo");
-            setPdfReady(true);
-        } catch (e) { console.error("Error PDF Libs", e); }
-    };
-    loadPdfLibs();
+    // 1. Cargar PDF Libs
+    loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
+      .then(() => loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js'))
+      .then(() => setPdfReady(true));
 
+    // 2. Cargar Configuración de MEMORIA LOCAL (Celular/PC)
+    const savedConfig = localStorage.getItem('todoMaletinesConfig');
+    if (savedConfig) {
+      try {
+        const parsed = JSON.parse(savedConfig);
+        setCompanyProfile({ ...defaultProfile, ...parsed }); 
+        if (parsed.defaultTerms) setTerms(parsed.defaultTerms);
+      } catch (e) { console.error("Error cargando config local"); }
+    }
+
+    // 3. Auth Firebase (Solo para Clientes)
     if (auth) {
-        signInAnonymously(auth).catch((error) => console.error("Auth Error:", error));
-        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-            setUser(currentUser);
-            setLoading(false);
-        });
-        return () => unsubscribe();
+        signInAnonymously(auth).catch((error) => console.error("Auth Error", error));
+        onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
     } else { setLoading(false); }
   }, []);
 
+  // --- FIREBASE CLIENTES ---
   useEffect(() => {
     if (!user || !db) return;
-    const qClients = collection(db, 'users', user.uid, 'clients');
-    const unsubClients = onSnapshot(qClients, (snapshot) => {
-      const clients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSavedClients(clients);
+    const q = collection(db, 'users', user.uid, 'clients');
+    return onSnapshot(q, (snap) => {
+      setSavedClients(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-
-    const fetchConfig = async () => {
-        try {
-            const docRef = doc(db, 'users', user.uid, 'config', 'profile');
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                const data = docSnap.data();
-                setCompanyProfile({ ...data, ruc: data.ruc || '20607442950' } as any);
-                setTerms(data.defaultTerms || '');
-            }
-        } catch (e) { console.error("Config fetch error", e); }
-    };
-    fetchConfig();
-    return () => unsubClients();
   }, [user]);
 
   // --- HANDLERS ---
@@ -155,6 +132,7 @@ export default function CotizadorApp() {
   const handleRemoveItem = (id: number) => setItems(items.filter(item => item.id !== id));
   const handleItemChange = (id: number, field: string, value: any) => setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
 
+  // Manejo de Imágenes (Productos)
   const handleImageUpload = (id: number, e: any) => {
     const file = e.target.files[0];
     if (file) {
@@ -163,38 +141,39 @@ export default function CotizadorApp() {
       reader.readAsDataURL(file);
     }
   };
+  const removeImage = (id: number) => handleItemChange(id, 'image', null);
 
-  const removeImage = (id: number) => {
-    handleItemChange(id, 'image', null);
-  };
-
+  // Manejo de Logo (Empresa)
   const handleLogoUpload = (e: any) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => setCompanyProfile(prev => ({ ...prev, logo: reader.result as string }));
+      reader.onloadend = () => {
+        setCompanyProfile(prev => ({ ...prev, logo: reader.result as string }));
+      };
       reader.readAsDataURL(file);
     }
   };
 
   const saveClientToDb = async () => {
-    if (!user || !db) return alert("Configura Firebase primero");
-    try { await addDoc(collection(db, 'users', user.uid, 'clients'), clientData); alert('Cliente guardado.'); } catch (e) { alert('Error al guardar.'); }
+    if (!user || !db) return alert("Conectando...");
+    try { await addDoc(collection(db, 'users', user.uid, 'clients'), clientData); alert('Cliente guardado.'); } catch (e) { alert('Error guardando cliente.'); }
   };
 
-  const saveCompanyConfig = async () => {
-      if (!user || !db) return;
-      try { await setDoc(doc(db, 'users', user.uid, 'config', 'profile'), companyProfile); alert('Configuración actualizada.'); } catch (e) { console.error(e); }
+  // --- GUARDADO LOCAL (LA SOLUCIÓN) ---
+  const saveLocalConfig = () => {
+    try {
+      const configToSave = { ...companyProfile, defaultTerms: terms };
+      localStorage.setItem('todoMaletinesConfig', JSON.stringify(configToSave));
+      alert('Configuración guardada en este dispositivo.');
+    } catch (e) {
+      alert('Error: El logo es muy pesado. Intenta con una imagen más pequeña.');
+    }
   };
 
-  const updateDefaultTerms = async () => {
-      if(!user || !db) return;
-      try {
-          const newProfile = { ...companyProfile, defaultTerms: terms };
-          setCompanyProfile(newProfile);
-          await setDoc(doc(db, 'users', user.uid, 'config', 'profile'), newProfile);
-          alert('Términos guardados.');
-      } catch(e) { console.error(e); }
+  const updateDefaultTerms = () => {
+    setTerms(defaultProfile.defaultTerms); // Resetear a lo guardado en perfil default
+    alert('Restaurado a valores de la empresa.');
   }
 
   const loadClient = (client: any) => {
@@ -212,6 +191,7 @@ export default function CotizadorApp() {
         const doc = new jsPDF();
         const { subtotalBase, igv, totalWithTax } = calculateTotals();
 
+        // LOGO
         if (companyProfile.logo) {
             try {
                 const imgProps = doc.getImageProperties(companyProfile.logo);
@@ -234,6 +214,7 @@ export default function CotizadorApp() {
         doc.text(`Email: ${companyProfile.email || ''}`, 14, yPos + 12);
         doc.text(`Telf: ${companyProfile.phone || ''}`, 14, yPos + 16);
 
+        // BOX
         doc.setDrawColor(200); doc.setFillColor(245, 247, 250);
         doc.rect(120, 15, 75, 30, 'F');
         doc.setFontSize(14); doc.setTextColor(0, 0, 0); doc.text("COTIZACIÓN", 125, 23);
@@ -242,6 +223,7 @@ export default function CotizadorApp() {
         doc.text(`Fecha: ${quoteMeta.date}`, 125, 35);
         doc.text(`Válido hasta: ${quoteMeta.validUntil}`, 125, 40);
 
+        // CLIENT
         doc.setFillColor(41, 128, 185); doc.rect(14, 60, 180, 7, 'F');
         doc.setFontSize(10); doc.setTextColor(255, 255, 255); doc.setFont(undefined, 'bold');
         doc.text("DATOS DEL CLIENTE", 16, 64.5);
@@ -253,6 +235,7 @@ export default function CotizadorApp() {
         doc.text(`Email: ${clientData.email}`, 120, 78);
         doc.text(`Telf: ${clientData.phone}`, 120, 83);
 
+        // TABLE
         const tableRows = items.map(item => [
           '', item.code, item.description, item.qty,
           `${quoteMeta.currency} ${parseFloat(item.price).toFixed(2)}`,
@@ -306,10 +289,7 @@ export default function CotizadorApp() {
         doc.text(`Gracias por su preferencia - ${companyProfile.name}`, 105, 285, { align: 'center' });
 
         doc.save(`Cotizacion_${quoteMeta.number}_${clientData.name || 'Cliente'}.pdf`);
-    } catch (error) {
-        console.error("PDF Gen Error", error);
-        alert("Error generando PDF. Intenta de nuevo.");
-    }
+    } catch (error) { alert("Error PDF. Intenta de nuevo."); }
   };
 
   const { subtotalBase, igv, totalWithTax } = calculateTotals();
@@ -319,6 +299,7 @@ export default function CotizadorApp() {
   return (
     <div className="fixed inset-0 flex flex-col bg-gray-50 font-sans overflow-hidden">
       
+      {/* HEADER */}
       <div className="bg-blue-900 text-white p-4 shadow-md shrink-0 z-20">
         <div className="flex justify-between items-center max-w-4xl mx-auto">
           <h1 className="text-xl font-bold flex items-center gap-2"><ShoppingBag size={20} /> Todo Maletines</h1>
@@ -328,6 +309,7 @@ export default function CotizadorApp() {
         </div>
       </div>
 
+      {/* TABS */}
       <div className="flex bg-white border-b border-gray-200 shrink-0 z-10 overflow-x-auto justify-center">
         <div className="flex w-full max-w-4xl">
            <button onClick={() => setActiveTab('cotizacion')} className={`flex-1 py-3 px-2 text-sm font-medium border-b-2 whitespace-nowrap ${activeTab === 'cotizacion' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}>Cotización</button>
@@ -337,6 +319,7 @@ export default function CotizadorApp() {
         </div>
       </div>
 
+      {/* CONTENIDO */}
       <div className="flex-1 overflow-y-auto p-4 w-full">
         <div className="max-w-4xl mx-auto pb-20">
             
@@ -367,7 +350,7 @@ export default function CotizadorApp() {
                 </div>
 
                 <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-100 relative">
-                   <div className="flex justify-between items-center mb-2"><h3 className="text-gray-500 text-xs font-bold uppercase">Términos y Condiciones</h3><button onClick={updateDefaultTerms} className="text-orange-500 text-[10px] flex items-center gap-1 hover:bg-orange-50 px-2 py-1 rounded"><RefreshCw size={12} /> Actualizar Default</button></div>
+                   <div className="flex justify-between items-center mb-2"><h3 className="text-gray-500 text-xs font-bold uppercase">Términos y Condiciones</h3><button onClick={updateDefaultTerms} className="text-orange-500 text-[10px] flex items-center gap-1 hover:bg-orange-50 px-2 py-1 rounded"><RefreshCw size={12} /> Restaurar Original</button></div>
                    <textarea value={terms} onChange={(e) => setTerms(e.target.value)} className="w-full text-xs text-gray-600 border rounded p-2 h-24 focus:outline-blue-500"/>
                 </div>
               </div>
@@ -449,13 +432,13 @@ export default function CotizadorApp() {
                             <div><label className="text-xs text-gray-400">Teléfono</label><input value={companyProfile.phone} onChange={(e) => setCompanyProfile({...companyProfile, phone: e.target.value})} className="w-full border p-2 rounded text-sm outline-none focus:border-blue-500"/></div>
                             <div><label className="text-xs text-gray-400">Términos y Condiciones (Por Defecto)</label><textarea value={companyProfile.defaultTerms} onChange={(e) => setCompanyProfile({...companyProfile, defaultTerms: e.target.value})} className="w-full border p-2 rounded text-sm outline-none focus:border-blue-500 h-24"/></div>
                         </div>
-                        <button onClick={saveCompanyConfig} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold mt-4 shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"><Save size={18} /> Guardar Configuración</button>
+                        <button onClick={saveLocalConfig} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold mt-4 shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"><Save size={18} /> Guardar Configuración (En Celular)</button>
                     </div>
                 </div>
             )}
         </div>
       </div>
-      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v2.6 - MODO APP FIJO (Final Corregido)</div>
+      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v2.9 - ANTCOR FINAL</div>
     </div>
   );
 }
