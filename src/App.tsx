@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Trash2, Plus, Save, Download, Users, Search, ShoppingBag, Image as ImageIcon, Settings, RefreshCw, Loader } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
+import { Trash2, Plus, Save, Download, Users, Search, ShoppingBag, Image as ImageIcon, Settings, RefreshCw, Loader, AlertCircle } from 'lucide-react';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot, doc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- CONFIGURACIÓN DE FIREBASE (Tus llaves reales) ---
+// --- CONFIGURACIÓN DE FIREBASE ---
 const firebaseConfig = {
   apiKey: "AIzaSyDZdScsyfbFZvJxToBOVatXO42l0kWbRcc",
   authDomain: "todomaletines-cotizar.firebaseapp.com",
@@ -14,14 +14,18 @@ const firebaseConfig = {
   appId: "1:992361155942:web:2cb1d605f3f4e86b8ecca7"
 };
 
-// Inicializamos Firebase de forma segura
+// --- INICIALIZACIÓN ROBUSTA ---
 let app: any, auth: any, db: any;
 try {
-  app = initializeApp(firebaseConfig);
+  if (!getApps().length) {
+    app = initializeApp(firebaseConfig);
+  } else {
+    app = getApp();
+  }
   auth = getAuth(app);
   db = getFirestore(app);
 } catch (e) {
-  console.warn("Firebase error (posiblemente ya inicializado)", e);
+  console.error("Error crítico inicializando Firebase:", e);
 }
 
 // --- UTILIDAD PDF ---
@@ -29,11 +33,7 @@ declare global { interface Window { jspdf: any; } }
 const loadScript = (src: string): Promise<void> => {
   return new Promise((resolve) => {
     const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
-        // Si ya existe, forzamos el evento de carga si es necesario
-        resolve();
-        return;
-    }
+    if (existing) return resolve();
     const script = document.createElement('script');
     script.src = src;
     script.onload = () => resolve();
@@ -42,15 +42,15 @@ const loadScript = (src: string): Promise<void> => {
 };
 
 export default function CotizadorApp() {
-  // CORRECCIÓN AQUÍ: Usamos 'any' para evitar el error de importación de TypeScript
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string>('');
   const [pdfReady, setPdfReady] = useState(false);
   const [activeTab, setActiveTab] = useState('cotizacion'); 
   const fileInputRefs = useRef<{[key: number]: HTMLInputElement | null}>({}); 
   const logoInputRef = useRef<HTMLInputElement>(null);
 
-  // --- DATOS POR DEFECTO (HARDCODED - ANTCOR) ---
+  // --- DATOS POR DEFECTO ---
   const defaultProfile = {
     name: 'MULTISERVICIOS ANTCOR S.A.C.', 
     ruc: '20607442950',
@@ -66,56 +66,52 @@ export default function CotizadorApp() {
   };
 
   const [companyProfile, setCompanyProfile] = useState(defaultProfile);
-
-  const [clientData, setClientData] = useState({
-    name: '', ruc: '', address: '', contact: '', email: '', phone: ''
-  });
-
+  const [clientData, setClientData] = useState({ name: '', ruc: '', address: '', contact: '', email: '', phone: '' });
   const [quoteMeta, setQuoteMeta] = useState({
     date: new Date().toISOString().substr(0, 10),
     validUntil: new Date(new Date().setDate(new Date().getDate() + 5)).toISOString().substr(0, 10),
     number: '00232', currency: 'S/', taxRate: 18
   });
-
-  const [items, setItems] = useState<any[]>([
-    { id: 1, code: 'PM348DC', description: 'Cooler nylon forro térmico, logo bordado 12cm, 40*40*40', qty: 570, price: 58.00, image: null }
-  ]);
-
+  const [items, setItems] = useState<any[]>([{ id: 1, code: 'PM348DC', description: 'Cooler nylon forro térmico, logo bordado 12cm, 40*40*40', qty: 570, price: 58.00, image: null }]);
   const [terms, setTerms] = useState(defaultProfile.defaultTerms);
   const [savedClients, setSavedClients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
   // --- INICIO ---
   useEffect(() => {
-    // 1. Cargar PDF Libs
     loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
       .then(() => loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js'))
       .then(() => setPdfReady(true));
 
-    // 2. Cargar Configuración de MEMORIA LOCAL (Celular/PC)
     const savedConfig = localStorage.getItem('todoMaletinesConfig');
     if (savedConfig) {
       try {
         const parsed = JSON.parse(savedConfig);
         setCompanyProfile({ ...defaultProfile, ...parsed }); 
         if (parsed.defaultTerms) setTerms(parsed.defaultTerms);
-      } catch (e) { console.error("Error cargando config local"); }
+      } catch (e) { console.error("Error local config"); }
     }
 
-    // 3. Auth Firebase (Solo para Clientes)
     if (auth) {
-        signInAnonymously(auth).catch((error) => console.error("Auth Error", error));
-        onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
-    } else { setLoading(false); }
+        setAuthError('');
+        signInAnonymously(auth)
+            .then(() => console.log("Conectado"))
+            .catch((error) => {
+                console.error("Auth Falló:", error);
+                setAuthError(`Error: ${error.message}`);
+            });
+        const unsubscribe = onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
+        return () => unsubscribe();
+    } else { setLoading(false); setAuthError("Error DB"); }
   }, []);
 
-  // --- FIREBASE CLIENTES ---
+  // --- CLIENTES ---
   useEffect(() => {
     if (!user || !db) return;
     const q = collection(db, 'users', user.uid, 'clients');
     return onSnapshot(q, (snap) => {
       setSavedClients(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    }, (err) => console.error(err));
   }, [user]);
 
   // --- HANDLERS ---
@@ -132,7 +128,6 @@ export default function CotizadorApp() {
   const handleRemoveItem = (id: number) => setItems(items.filter(item => item.id !== id));
   const handleItemChange = (id: number, field: string, value: any) => setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
 
-  // Manejo de Imágenes (Productos)
   const handleImageUpload = (id: number, e: any) => {
     const file = e.target.files[0];
     if (file) {
@@ -143,38 +138,29 @@ export default function CotizadorApp() {
   };
   const removeImage = (id: number) => handleItemChange(id, 'image', null);
 
-  // Manejo de Logo (Empresa)
   const handleLogoUpload = (e: any) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setCompanyProfile(prev => ({ ...prev, logo: reader.result as string }));
-      };
+      reader.onloadend = () => setCompanyProfile(prev => ({ ...prev, logo: reader.result as string }));
       reader.readAsDataURL(file);
     }
   };
 
   const saveClientToDb = async () => {
-    if (!user || !db) return alert("Conectando...");
-    try { await addDoc(collection(db, 'users', user.uid, 'clients'), clientData); alert('Cliente guardado.'); } catch (e) { alert('Error guardando cliente.'); }
+    if (!auth || !user) return alert("Conectando...");
+    try { await addDoc(collection(db, 'users', user.uid, 'clients'), clientData); alert('Cliente guardado.'); } catch (e: any) { alert(`Error: ${e.message}`); }
   };
 
-  // --- GUARDADO LOCAL (LA SOLUCIÓN) ---
   const saveLocalConfig = () => {
     try {
       const configToSave = { ...companyProfile, defaultTerms: terms };
       localStorage.setItem('todoMaletinesConfig', JSON.stringify(configToSave));
-      alert('Configuración guardada en este dispositivo.');
-    } catch (e) {
-      alert('Error: El logo es muy pesado. Intenta con una imagen más pequeña.');
-    }
+      alert('Configuración guardada.');
+    } catch (e) { alert('Logo muy pesado.'); }
   };
 
-  const updateDefaultTerms = () => {
-    setTerms(defaultProfile.defaultTerms); // Resetear a lo guardado en perfil default
-    alert('Restaurado a valores de la empresa.');
-  }
+  const updateDefaultTerms = () => { setTerms(defaultProfile.defaultTerms); alert('Restaurado.'); }
 
   const loadClient = (client: any) => {
     setClientData({
@@ -185,13 +171,12 @@ export default function CotizadorApp() {
   };
 
   const generatePDF = () => {
-    if (!window.jspdf) return alert("Cargando motor PDF...");
+    if (!window.jspdf) return alert("Cargando PDF...");
     try {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
         const { subtotalBase, igv, totalWithTax } = calculateTotals();
 
-        // LOGO
         if (companyProfile.logo) {
             try {
                 const imgProps = doc.getImageProperties(companyProfile.logo);
@@ -214,7 +199,6 @@ export default function CotizadorApp() {
         doc.text(`Email: ${companyProfile.email || ''}`, 14, yPos + 12);
         doc.text(`Telf: ${companyProfile.phone || ''}`, 14, yPos + 16);
 
-        // BOX
         doc.setDrawColor(200); doc.setFillColor(245, 247, 250);
         doc.rect(120, 15, 75, 30, 'F');
         doc.setFontSize(14); doc.setTextColor(0, 0, 0); doc.text("COTIZACIÓN", 125, 23);
@@ -223,7 +207,6 @@ export default function CotizadorApp() {
         doc.text(`Fecha: ${quoteMeta.date}`, 125, 35);
         doc.text(`Válido hasta: ${quoteMeta.validUntil}`, 125, 40);
 
-        // CLIENT
         doc.setFillColor(41, 128, 185); doc.rect(14, 60, 180, 7, 'F');
         doc.setFontSize(10); doc.setTextColor(255, 255, 255); doc.setFont(undefined, 'bold');
         doc.text("DATOS DEL CLIENTE", 16, 64.5);
@@ -235,7 +218,6 @@ export default function CotizadorApp() {
         doc.text(`Email: ${clientData.email}`, 120, 78);
         doc.text(`Telf: ${clientData.phone}`, 120, 83);
 
-        // TABLE
         const tableRows = items.map(item => [
           '', item.code, item.description, item.qty,
           `${quoteMeta.currency} ${parseFloat(item.price).toFixed(2)}`,
@@ -249,14 +231,7 @@ export default function CotizadorApp() {
           theme: 'grid',
           headStyles: { fillColor: [41, 128, 185], textColor: 255, valign: 'middle', halign: 'center' },
           styles: { fontSize: 9, cellPadding: 3, valign: 'middle' },
-          columnStyles: {
-            0: { cellWidth: 15, minCellHeight: 15 },
-            1: { cellWidth: 20 },
-            2: { cellWidth: 'auto' }, 
-            3: { cellWidth: 18, halign: 'center' },
-            4: { cellWidth: 25, halign: 'right' },
-            5: { cellWidth: 25, halign: 'right' },
-          },
+          columnStyles: { 0: { cellWidth: 15, minCellHeight: 15 }, 1: { cellWidth: 20 }, 2: { cellWidth: 'auto' }, 3: { cellWidth: 18, halign: 'center' }, 4: { cellWidth: 25, halign: 'right' }, 5: { cellWidth: 25, halign: 'right' } },
           didDrawCell: (data: any) => {
             if (data.column.index === 0 && data.cell.section === 'body') {
                const item = items[data.row.index];
@@ -289,7 +264,7 @@ export default function CotizadorApp() {
         doc.text(`Gracias por su preferencia - ${companyProfile.name}`, 105, 285, { align: 'center' });
 
         doc.save(`Cotizacion_${quoteMeta.number}_${clientData.name || 'Cliente'}.pdf`);
-    } catch (error) { alert("Error PDF. Intenta de nuevo."); }
+    } catch (error) { alert("Error PDF."); }
   };
 
   const { subtotalBase, igv, totalWithTax } = calculateTotals();
@@ -298,8 +273,6 @@ export default function CotizadorApp() {
 
   return (
     <div className="fixed inset-0 flex flex-col bg-gray-50 font-sans overflow-hidden">
-      
-      {/* HEADER */}
       <div className="bg-blue-900 text-white p-4 shadow-md shrink-0 z-20">
         <div className="flex justify-between items-center max-w-4xl mx-auto">
           <h1 className="text-xl font-bold flex items-center gap-2"><ShoppingBag size={20} /> Todo Maletines</h1>
@@ -309,7 +282,6 @@ export default function CotizadorApp() {
         </div>
       </div>
 
-      {/* TABS */}
       <div className="flex bg-white border-b border-gray-200 shrink-0 z-10 overflow-x-auto justify-center">
         <div className="flex w-full max-w-4xl">
            <button onClick={() => setActiveTab('cotizacion')} className={`flex-1 py-3 px-2 text-sm font-medium border-b-2 whitespace-nowrap ${activeTab === 'cotizacion' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}>Cotización</button>
@@ -319,17 +291,17 @@ export default function CotizadorApp() {
         </div>
       </div>
 
-      {/* CONTENIDO */}
       <div className="flex-1 overflow-y-auto p-4 w-full">
         <div className="max-w-4xl mx-auto pb-20">
-            
+            {authError && <div className="bg-red-50 text-red-600 p-3 rounded mb-4 text-xs flex items-center gap-2 border border-red-200"><AlertCircle size={16} /><span>{authError}</span></div>}
+
             {activeTab === 'cotizacion' && (
               <div className="space-y-6 animate-in fade-in zoom-in duration-300">
                 <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
                   <h3 className="text-gray-500 text-xs font-bold uppercase mb-3">Datos Generales</h3>
                   <div className="grid grid-cols-2 gap-3">
                     <div><label className="text-xs text-gray-500">Número</label><input type="text" value={quoteMeta.number} onChange={(e) => setQuoteMeta({...quoteMeta, number: e.target.value})} className="w-full border-b border-gray-300 focus:border-blue-600 outline-none py-1 text-sm font-mono"/></div>
-                    <div><label className="text-xs text-gray-500">IGV (%)</label><input type="number" value={quoteMeta.taxRate} onChange={(e) => setQuoteMeta({...quoteMeta, taxRate: parseFloat(e.target.value) || 0})} className="w-full border-b border-gray-300 focus:border-blue-600 outline-none py-1 text-sm font-bold text-blue-800"/></div>
+                    <div><label className="text-xs text-gray-500">IGV (%)</label><input type="number" onFocus={(e) => e.target.select()} value={quoteMeta.taxRate} onChange={(e) => setQuoteMeta({...quoteMeta, taxRate: parseFloat(e.target.value) || 0})} className="w-full border-b border-gray-300 focus:border-blue-600 outline-none py-1 text-sm font-bold text-blue-800"/></div>
                     <div><label className="text-xs text-gray-500">Fecha</label><input type="date" value={quoteMeta.date} onChange={(e) => setQuoteMeta({...quoteMeta, date: e.target.value})} className="w-full border-b border-gray-300 focus:border-blue-600 outline-none py-1 text-sm"/></div>
                     <div><label className="text-xs text-gray-500">Valido Hasta</label><input type="date" value={quoteMeta.validUntil} onChange={(e) => setQuoteMeta({...quoteMeta, validUntil: e.target.value})} className="w-full border-b border-gray-300 focus:border-blue-600 outline-none py-1 text-sm"/></div>
                   </div>
@@ -377,14 +349,33 @@ export default function CotizadorApp() {
                         <div className="flex-1 space-y-3">
                             <div className="grid grid-cols-3 gap-2">
                               <div className="col-span-1"><label className="text-[10px] text-gray-400">Código</label><input value={item.code} onChange={(e) => handleItemChange(item.id, 'code', e.target.value)} className="w-full border-b border-gray-300 py-1 text-sm font-medium focus:border-blue-600 outline-none" placeholder="PM348..."/></div>
-                              <div className="col-span-2"><label className="text-[10px] text-gray-400">Precio Unit. (Inc. IGV)</label><input type="number" value={item.price} onChange={(e) => handleItemChange(item.id, 'price', parseFloat(e.target.value) || 0)} className="w-full border-b border-gray-300 py-1 text-sm font-bold text-blue-700 focus:border-blue-600 outline-none" placeholder="0.00"/></div>
+                              <div className="col-span-2">
+                                <label className="text-[10px] text-gray-400">Precio Unit. (Inc. IGV)</label>
+                                {/* AQUÍ ESTÁ EL ARREGLO: onFocus selecciona todo */}
+                                <input 
+                                  type="number" 
+                                  value={item.price}
+                                  onFocus={(e) => e.target.select()} 
+                                  onChange={(e) => handleItemChange(item.id, 'price', parseFloat(e.target.value) || 0)} 
+                                  className="w-full border-b border-gray-300 py-1 text-sm font-bold text-blue-700 focus:border-blue-600 outline-none" 
+                                  placeholder="0.00"
+                                />
+                              </div>
                             </div>
                             <div><label className="text-xs text-gray-400">Descripción</label><textarea value={item.description} onChange={(e) => handleItemChange(item.id, 'description', e.target.value)} className="w-full border rounded p-2 text-sm focus:ring-1 focus:ring-blue-400 outline-none h-16" placeholder="Descripción..."/></div>
                         </div>
                       </div>
                       <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
                           <div><label className="text-[10px] text-gray-400 block">Cantidad</label>
-                            <div className="flex items-center gap-2"><button onClick={() => handleItemChange(item.id, 'qty', Math.max(1, item.qty - 1))} className="bg-gray-100 w-8 h-8 rounded-full flex items-center justify-center font-bold text-gray-600">-</button><input type="number" value={item.qty} onChange={(e) => handleItemChange(item.id, 'qty', parseInt(e.target.value) || 1)} className="w-16 text-center font-bold text-lg border-b border-gray-300 focus:border-blue-500 outline-none"/><button onClick={() => handleItemChange(item.id, 'qty', item.qty + 1)} className="bg-gray-100 w-8 h-8 rounded-full flex items-center justify-center font-bold text-gray-600">+</button></div>
+                            <div className="flex items-center gap-2"><button onClick={() => handleItemChange(item.id, 'qty', Math.max(1, item.qty - 1))} className="bg-gray-100 w-8 h-8 rounded-full flex items-center justify-center font-bold text-gray-600">-</button>
+                            <input 
+                                type="number" 
+                                value={item.qty} 
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => handleItemChange(item.id, 'qty', parseInt(e.target.value) || 1)} 
+                                className="w-16 text-center font-bold text-lg border-b border-gray-300 focus:border-blue-500 outline-none"
+                            />
+                            <button onClick={() => handleItemChange(item.id, 'qty', item.qty + 1)} className="bg-gray-100 w-8 h-8 rounded-full flex items-center justify-center font-bold text-gray-600">+</button></div>
                           </div>
                           <div className="text-right"><label className="text-[10px] text-gray-400 block">Subtotal (Inc. IGV)</label><span className="text-lg font-bold text-gray-700">{quoteMeta.currency} {(item.qty * item.price).toFixed(2)}</span></div>
                       </div>
@@ -432,13 +423,13 @@ export default function CotizadorApp() {
                             <div><label className="text-xs text-gray-400">Teléfono</label><input value={companyProfile.phone} onChange={(e) => setCompanyProfile({...companyProfile, phone: e.target.value})} className="w-full border p-2 rounded text-sm outline-none focus:border-blue-500"/></div>
                             <div><label className="text-xs text-gray-400">Términos y Condiciones (Por Defecto)</label><textarea value={companyProfile.defaultTerms} onChange={(e) => setCompanyProfile({...companyProfile, defaultTerms: e.target.value})} className="w-full border p-2 rounded text-sm outline-none focus:border-blue-500 h-24"/></div>
                         </div>
-                        <button onClick={saveLocalConfig} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold mt-4 shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"><Save size={18} /> Guardar Configuración (En Celular)</button>
+                        <button onClick={saveLocalConfig} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold mt-4 shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"><Save size={18} /> Guardar Configuración (En este dispositivo)</button>
                     </div>
                 </div>
             )}
         </div>
       </div>
-      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v2.9 - ANTCOR FINAL</div>
+      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v3.1 - ANTCOR PULIDO</div>
     </div>
   );
 }
