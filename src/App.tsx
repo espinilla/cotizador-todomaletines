@@ -41,12 +41,24 @@ const loadScript = (src: string): Promise<void> => {
   });
 };
 
-// --- UTILIDAD FECHAS ---
-const getToday = () => new Date().toISOString().split('T')[0];
+// --- UTILIDAD FECHAS (CORREGIDA PARA HORA LOCAL) ---
+// Ahora usa new Date() simple que toma la hora de tu celular/PC,
+// y le damos formato manual YYYY-MM-DD para evitar conversión a UTC
+const getToday = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const getEndOfMonth = () => {
   const date = new Date();
   const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-  return lastDay.toISOString().split('T')[0];
+  const year = lastDay.getFullYear();
+  const month = String(lastDay.getMonth() + 1).padStart(2, '0');
+  const day = String(lastDay.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 export default function CotizadorApp() {
@@ -67,7 +79,7 @@ export default function CotizadorApp() {
     email: 'ventas@todomaletines.com',
     phone: '933761658 / 969940986',
     logo: null as string | null,
-    quoteCount: '00101', // Contador inicial por defecto
+    quoteCount: '00101', 
     defaultTerms: `1° El pago será con 50% de anticipo y 50% contraentrega, se dará la verificación del mismo, el abono se realizara a la cuenta BCP 305-9843679-0-06, a nombre Multiservicios Antcor S.A.C. CCI: 00230500984367900611
 2° Para dar la conformidad a esta cotización se debe enviar firmada o sellada a nuestro email.
 3° La firma o sello indica la aceptación del cliente
@@ -79,8 +91,8 @@ export default function CotizadorApp() {
   
   // FECHAS AUTOMÁTICAS E IGV
   const [quoteMeta, setQuoteMeta] = useState({
-    date: getToday(), // Día actual
-    validUntil: getEndOfMonth(), // Fin de mes automático
+    date: getToday(), // Ahora sí marca TU hora local
+    validUntil: getEndOfMonth(), 
     number: '00101', 
     currency: 'S/', 
     taxRate: 18
@@ -97,7 +109,6 @@ export default function CotizadorApp() {
       .then(() => loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js'))
       .then(() => setPdfReady(true));
 
-    // Cargar Configuración + Contador
     const savedConfig = localStorage.getItem('todoMaletinesConfig');
     if (savedConfig) {
       try {
@@ -105,11 +116,10 @@ export default function CotizadorApp() {
         const mergedProfile = { ...defaultProfile, ...parsed };
         setCompanyProfile(mergedProfile);
         
-        // Sincronizar número de cotización actual con el guardado
         setQuoteMeta(prev => ({
             ...prev,
             number: mergedProfile.quoteCount || '00101',
-            date: getToday(),
+            date: getToday(), // Recalcular hoy al abrir
             validUntil: getEndOfMonth()
         }));
 
@@ -495,7 +505,7 @@ export default function CotizadorApp() {
             )}
         </div>
       </div>
-      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v3.2 - ANTCOR AVANZADO</div>
+      <div className="text-center text-xs text-gray-400 py-2 bg-gray-50 border-t shrink-0">v3.3 - ANTCOR SINCRONIZADO</div>
     </div>
   );
 }
